@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HOMERPEPE.ORIGINS</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+        }
+        
+        canvas {
+            display: block;
+        }
+        </style>
+</head>
+
+<body>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.4.0/p5.js"></script>
+    <!-- If you're not using ES6 modules in your JS, you can remove type="module" -->
+    <script>
+let images = [null, null, null, null, null, null];
+const transparencyThreshold = 128;
+const numOfStreams = 2500;
+let imgCenter; 
+let pointImageOverlapCache = {};  
+let circleDiameter;
+let streamGroups = [];
+let desiredStreamCounts = [];
+let totalStreamsToGenerate = 0;
+const REF_AREA = 1920 * 1080;  // Assuming 1920x1080 as the reference resolution where numOfStreams was 900.
+const BASE_SPEED = 5;  // the basic speed when there's just one stream
+const LOG_SCALE_FACTOR = .9;  // scaling factor for logarithmic relationship
+
+
+
+function preload() {
+    circleDiameter = Math.min(windowWidth, windowHeight);
+    let desiredImageHeight = circleDiameter * 2;
+
+    images = ["https://znshnudxiwqjzey53j6zhruzlifqouj7zgzpig3l3nqjfome6q6q.arweave.net/y2R20HdFoJyTHdp9k8aZWgsHUT_JsvQba9tgkrmE9D0",
+                  "https://56a25m2jsfbffzh3phbnl773tb3jtpzpqnjlwh423xl6uq6vbarq.arweave.net/74Gus0mRQlLk-3nC1f_7mHaZvy-DUrsfmt3X6kPVCCM",
+                  "https://hfike2q5d7634lxehpuznrjkpkma5i7d6ekjyz6lydksccayzrcq.arweave.net/OVCiah0f_b4u5DvplsUqepgOo-PxFJxny8DVIQgYzEU",
+                  "https://sei3j7cn2nab5ywusjywpi6ievpgsqo2o6oz6tqz4fdne4owk6oq.arweave.net/kRG0_E3TQB7i1JJxZ6PIJV5pQdp3nZ9OGeFG0nHWV50",
+                  "https://rzonho5c3yrvfcrbgpqcvacda4hmos32tbgiocb2ckk423iwiugq.arweave.net/jlzTu6LeI1KKITPgKoBDBw7HS3qYTIcIOhKVzW0WRQ0",
+                  "https://hhajummqy2pjdlj2zlmjds6wvs2ag2ogjklsmh2vvid4iew3v5aa.arweave.net/OcCaMZDGnpGtOsrYkcvWrLQDacZKlyYfVaoHxBLbr0A"]
+    for (let i = 0; i < 6; i++) {
+        loadImage(images[i], img => {
+            let scaleFactor = desiredImageHeight / img.height;
+            img.resize(img.width * scaleFactor, img.height * scaleFactor);
+            images[i] = img;
+        });
+    }
+}
+
+function getCurrentAttractMode() {
+    // If no streams exist, default to true
+    if (streamGroups.length === 0 || streamGroups[0].length === 0) {
+        return true;
+    }
+    return streamGroups[0][0].attractMode;
+}
+
+function generateStreams() {
+    // Compute the ratio of the current window area to the reference area
+    let areaRatio = (windowWidth * windowHeight) / REF_AREA;
+    
+    // Adjust numOfStreams based on the ratio
+    let adjustedNumOfStreams = Math.round(numOfStreams * areaRatio);
+
+    const percentages = [0.6, 0.175, 0.075, .05, 0.075, 0.025];
+    desiredStreamCounts = [];
+
+    for (let j = 0; j < 6; j++) {
+        let desiredCountForImage = Math.round(adjustedNumOfStreams * percentages[j]);
+        desiredStreamCounts.push(desiredCountForImage);
+    }
+    
+    totalStreamsToGenerate = adjustedNumOfStreams;
+}
+
+
+function setup() {
+
+    for (let i = 0; i < 6; i++) {
+        streamGroups.push([]);
+    }
+
+    createCanvas(windowWidth, windowHeight);
+    imgCenter = createVector(width / 2, height / 2);
+    background(135, 206, 235);
+
+    generateStreams();  // Generate streams based on window size
+}
+
+function windowResized() {
+    // Resize the canvas to the new window width and height
+    resizeCanvas(windowWidth, windowHeight);
+    imgCenter.set(width / 2, height / 2);  // Reset the center as the window has been resized
+
+    // Recompute any parameters that depend on the window size
+    circleDiameter = Math.min(windowWidth, windowHeight);
+    let desiredImageHeight = circleDiameter * 2;
+    
+    for (let i = 0; i < images.length; i++) {
+        let img = images[i];
+        if (img) {
+            let scaleFactor = desiredImageHeight / img.height;
+            img.resize(img.width * scaleFactor, img.height * scaleFactor);
+        }
+    }
+    
+    // Update center coordinates
+    imgCenter.set(width / 2, height / 2);
+    
+    generateStreams();  // Regenerate streams based on new window size
+}
+
+function isOverAnyImageCached(point) {
+let cacheKey = `${point.x},${point.y}`;
+
+// Use the cached result if available
+if (pointImageOverlapCache.hasOwnProperty(cacheKey)) {
+return pointImageOverlapCache[cacheKey];
+}
+
+let result = isOverAnyImage(point);
+pointImageOverlapCache[cacheKey] = result;  // Cache the result
+
+return result;
+}
+
+function draw() {
+    background(135, 206, 235);
+    pointImageOverlapCache = {};  // Clear the cache for each frame
+    drawTransparentCircle();
+
+    adjustStreams();  // Adjust the number of streams
+
+    for (let streams of streamGroups) {
+        for (let s of streams) {
+            s.update();
+            s.display();
+        }
+    }
+}
+
+// New function to adjust the number of streams
+function adjustStreams() {
+    const colors = [
+        [0, 96, 0],
+        [96, 216, 0],
+        [255, 253, 208],
+        [255, 253, 208],
+        [145, 56, 49],
+        [53, 57, 53]
+    ];
+
+    for (let j = 0; j < 6; j++) {
+        while (streamGroups[j].length < desiredStreamCounts[j]) {
+            // Sample a point from an existing stream if available
+            let samplePoint = streamGroups[j].length > 0 ? random(random(streamGroups[j]).points) : null;
+
+            // Add a stream with the sampled point
+            streamGroups[j].push(new Stream(colors[j], j, samplePoint));
+        }
+
+        while (streamGroups[j].length > desiredStreamCounts[j]) {
+    // Start fading the last stream
+    streamGroups[j][streamGroups[j].length - 1].fade();
+    
+    // Remove the stream if it's fully faded
+    if(streamGroups[j][streamGroups[j].length - 1].alpha <= 0) {
+        streamGroups[j].pop();
+    } else {
+        break; // Only fade one stream at a time for smoother effect
+    }
+}
+
+    }
+}
+
+function drawTransparentCircle() {
+// Transparent circle style
+fill(255, 0); // White color with 60% transparency
+noStroke();
+
+// Drawing the circle at the center of the canvas
+ellipse(width / 2, height / 2, circleDiameter);
+}
+
+function isInsideCircle(point) {
+    return dist(point.x, point.y, imgCenter.x, imgCenter.y) <= circleDiameter / 2;
+}
+
+function mousePressed() {
+for (let streams of streamGroups) {
+for (let s of streams) {
+    s.changeMode();
+}
+}
+}
+
+
+
+class Stream {
+    constructor(color, assignedImageIdx, startPoint = null) {
+        this.color = color;
+        this.points = [];
+        this.noiseOffset = random(1000);
+        this.currentAngle = random(TWO_PI);
+        this.attractMode = getCurrentAttractMode();
+        this.assignedImageIdx = assignedImageIdx;
+        this.initStream(startPoint);
+        this.insideImage = this.isOverAssignedImage(this.points[0]);
+        this.alpha = 255;
+
+    }
+    
+
+    changeMode() {
+        this.attractMode = !this.attractMode;
+    }
+  
+      isOverAnyImage(point) {
+                return isOverAnyImageCached(point);  // Use the cached function instead
+                }
+
+                initStream(startPoint = null) {
+                    if (startPoint) {
+                        this.points.push(startPoint);
+                    } else {
+                        let startX = random(width);
+                        let startY = random(height);
+            
+                        while (this.isOverAnyImage(createVector(startX, startY))) {
+                            startX = random(width);
+                            startY = random(height);
+                        }
+            
+                        this.points.push(createVector(startX, startY));
+                    }
+                }
+
+    isOutsideAllImages(point) {
+        return !this.isOverAnyImage(point);
+    }
+
+    isOverAnyImage(point) {
+        for (let img of images) {
+            if (this.isOverImage(point, img)) return true;
+        }
+        return false;
+    }
+
+    isOverAssignedImage(point) {
+        return this.isOverImage(point, images[this.assignedImageIdx]);
+    }
+
+    isOverImage(point, img) {
+        let imgX = point.x - (width / 2 - img.width / 2);
+        let imgY = point.y - (height / 2 - img.height / 2);
+        if (imgX >= 0 && imgX < img.width && imgY >= 0 && imgY < img.height) {
+            let pixelColor = img.get(imgX, imgY);
+            return alpha(pixelColor) > transparencyThreshold && isInsideCircle(point);
+        }
+        return false;
+    }
+  
+      stayWithinBounds(point) {
+const buffer = 5;  // Small buffer to ensure that the stream doesn't touch the edge
+if (point.x <= buffer || point.x >= width - buffer) {
+this.currentAngle = PI - this.currentAngle;  // Reflect horizontally
+}
+if (point.y <= buffer || point.y >= height - buffer) {
+this.currentAngle = -this.currentAngle;  // Reflect vertically
+}
+}
+
+get totalStreamsCount() {
+        let totalStreams = 0;
+        for (let streams of streamGroups) {
+            totalStreams += streams.length;
+        }
+        return totalStreams;
+    }
+
+    update() {
+        let lastPoint = this.points[this.points.length - 1];
+        let newPoint;
+
+        // Calculate the speed for attractMode based on total streams count using logarithmic relationship
+        let speed = this.attractMode ? BASE_SPEED + LOG_SCALE_FACTOR * Math.log(this.totalStreamsCount + 1) : 8;
+
+if (this.attractMode) {
+if (this.isOutsideAllImages(lastPoint) || this.insideImage || this.isOverAssignedImage(lastPoint)) {
+    this.currentAngle = this.calculateAngleTowardsImage(lastPoint, this.assignedImageIdx);
+}
+} else {
+if (this.isOverAnyImage(lastPoint)) {
+    // Repulsion mechanism: If point is inside any image, move away from the image center
+    this.currentAngle = this.calculateAngleAwayFromClosestImageCenter(lastPoint);
+}
+}
+
+let angleVariation = map(noise(this.noiseOffset), 0, 1, -PI, PI);
+this.currentAngle += angleVariation;
+
+newPoint = p5.Vector.fromAngle(this.currentAngle).mult(speed).add(lastPoint);  // Using the speed variable here
+
+// If in attractMode and inside assigned image, check if the new point is outside
+if (this.attractMode && this.insideImage && !this.isOverAssignedImage(newPoint)) {
+this.currentAngle += PI; // Flip direction
+newPoint = p5.Vector.fromAngle(this.currentAngle).mult(speed).add(lastPoint); // Using the speed variable here too
+}
+
+this.stayWithinBounds(newPoint);  // Check and adjust for bounds
+
+this.points.push(newPoint);
+this.noiseOffset += 0.075;
+
+if (this.points.length > 100) {
+this.points.shift();
+}
+
+// Update the insideImage flag based on the last point
+this.insideImage = this.isOverAssignedImage(lastPoint);
+}
+
+    calculateAngleAwayFromClosestImageCenter(point) {
+        let closestDistance = Infinity;
+        let closestImageCenter;
+
+        for (let img of images) {
+            let distance = dist(point.x, point.y, imgCenter.x, imgCenter.y);
+            if (distance < closestDistance && this.isOverImage(point, img)) {
+                closestDistance = distance;
+                closestImageCenter = imgCenter;
+            }
+        }
+
+        if (closestImageCenter) {
+            return p5.Vector.sub(point, closestImageCenter).heading();
+        }
+        
+        return random(TWO_PI);
+    }
+
+    calculateAngleTowardsImage(point, imgIdx) {
+        if (this.insideImage) {
+            return random(TWO_PI);
+        }
+        let angleTowardsImage = p5.Vector.sub(imgCenter, point).heading();
+        return angleTowardsImage;
+    }
+
+    fade() {
+    this.alpha -= 250;  // Decrement by 5 for a moderate fading speed. Adjust as needed.
+}
+
+    display() {
+        noFill();
+        stroke(this.color[0], this.color[1], this.color[2], this.alpha);
+        strokeWeight(.2);
+        beginShape();
+        for (let pt of this.points) {
+            vertex(pt.x, pt.y)
+        }
+        endShape();
+    }
+}
+    </script>
+</body>
+
+</html>
